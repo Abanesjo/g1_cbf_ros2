@@ -1,0 +1,5 @@
+g1_cbf_node:
+  ros__parameters:
+    dt: 0.01
+    beta: 1.05
+    gamma: 5.0
