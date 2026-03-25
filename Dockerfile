@@ -7,8 +7,11 @@ RUN apt install -y \
     ros-humble-rmw-cyclonedds-cpp \
     ros-humble-rosidl-generator-dds-idl \
     ros-humble-rosbag2-cpp \
+    ros-humble-joint-state-publisher \ 
+    ros-humble-joint-state-publisher-gui \
     libyaml-cpp-dev \
-    libeigen3-dev
+    libeigen3-dev \ 
+    tmux
 
 # Workspace setup
 WORKDIR /workspace
