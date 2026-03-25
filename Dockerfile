@@ -9,6 +9,7 @@ RUN apt install -y \
     ros-humble-rosbag2-cpp \
     ros-humble-joint-state-publisher \ 
     ros-humble-joint-state-publisher-gui \
+    ros-humble-pinocchio \ 
     libyaml-cpp-dev \
     libeigen3-dev \ 
     tmux
