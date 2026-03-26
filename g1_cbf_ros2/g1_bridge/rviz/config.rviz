@@ -16,7 +16,7 @@ Panels:
         - /Collision Distances1/Namespaces1
         - /Obstacle Markers1
       Splitter Ratio: 0.5
-    Tree Height: 503
+    Tree Height: 365
   - Class: rviz_common/Selection
     Name: Selection
   - Class: rviz_common/Tool Properties
@@ -596,25 +596,25 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz_default_plugins/Orbit
-      Distance: 1.1993783712387085
+      Distance: 2.098503351211548
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
         Swap Stereo Eyes: false
         Value: false
       Focal Point:
-        X: 0.2165950983762741
-        Y: -0.002126766834408045
-        Z: 0.10272806882858276
+        X: 0.024190040305256844
+        Y: -0.022219426929950714
+        Z: -0.08128003031015396
       Focal Shape Fixed Size: true
       Focal Shape Size: 0.05000000074505806
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 0.049797262996435165
+      Pitch: 0.17979715764522552
       Target Frame: <Fixed Frame>
       Value: Orbit (rviz)
-      Yaw: 0.008098026737570763
+      Yaw: 1.236247181892395
     Saved: ~
 Window Geometry:
   Displays:
