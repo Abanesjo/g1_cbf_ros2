@@ -149,19 +149,26 @@ class G1CBFNode(Node):
 
         # Build CBF constraints
         constraints = []
+        closest_points = []
         phi_min = float('inf')
         for pair in COLLISION_PAIRS:
             nameA, nameB = pair
             eA, eB = endpoints[nameA], endpoints[nameB]
 
-            phi, A_row, b_val = self.cbf.build_constraint(
+            phi, A_row, b_val, p1, p2 = self.cbf.build_constraint(
                 eA['radius'], eA['a'], eA['b'],
                 eA['J_a'], eA['J_b'],
                 eB['radius'], eB['a'], eB['b'],
                 eB['J_a'], eB['J_b'],
             )
             constraints.append((A_row, b_val))
+            closest_points.append((p1, p2))
             phi_min = min(phi_min, phi)
+
+        # Publish distance lines
+        self.viz.publish_distances(
+            self.get_clock().now().to_msg(), closest_points,
+        )
 
         # Solve QP
         dq_safe = self.qp.solve(

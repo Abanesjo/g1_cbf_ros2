@@ -4,5 +4,5 @@ g1_cbf_node:
     margin_phi: 0.001
     gamma: 5.0
     K: 5.0
-    max_velocity: 0.5
+    max_velocity: 5.0
     lpf_gain: 0.0

@@ -21,10 +21,13 @@ _COLORS = {
 class ColliderVisualizer:
     """Publishes MarkerArray for collision capsules."""
 
-    def __init__(self, node, kinematics, beta: float = 1.05):
+    def __init__(self, node, kinematics):
         self.kin = kinematics
         self.pub = node.create_publisher(
             MarkerArray, '/robot_colliders', 10,
+        )
+        self.dist_pub = node.create_publisher(
+            MarkerArray, '/collision_distances', 10,
         )
 
     def publish(self, stamp):
@@ -95,3 +98,28 @@ class ColliderVisualizer:
         r, g, b, a = color
         m.color = ColorRGBA(r=r, g=g, b=b, a=a)
         return m
+
+    def publish_distances(self, stamp, closest_points):
+        """Publish line segments between closest points of each pair.
+
+        closest_points: list of (p1, p2) numpy arrays
+        """
+        msg = MarkerArray()
+        for i, (p1, p2) in enumerate(closest_points):
+            m = Marker()
+            m.header.frame_id = 'pelvis'
+            m.header.stamp = stamp
+            m.ns = 'distances'
+            m.id = i
+            m.type = Marker.LINE_LIST
+            m.action = Marker.ADD
+            m.scale = Vector3(x=0.005, y=0.0, z=0.0)
+            m.color = ColorRGBA(r=1.0, g=1.0, b=0.0, a=1.0)
+            m.points.append(Point(
+                x=float(p1[0]), y=float(p1[1]), z=float(p1[2]),
+            ))
+            m.points.append(Point(
+                x=float(p2[0]), y=float(p2[1]), z=float(p2[2]),
+            ))
+            msg.markers.append(m)
+        self.dist_pub.publish(msg)

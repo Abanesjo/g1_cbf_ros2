@@ -10,6 +10,7 @@ import jax
 import jax.numpy as jnp
 from jax import grad
 from dpax.endpoints import proximity
+from dpax.qp_utils import get_cost_terms, active_set_qp
 
 
 class DpaxCBF:
@@ -84,4 +85,14 @@ class DpaxCBF:
         A_row = dphi_dq
         b_val = -self.gamma * h
 
-        return phi, A_row, b_val
+        # Recover closest points on centerlines via dpax QP
+        a1_j = jnp.array(a1, dtype=jnp.float64)
+        b1_j = jnp.array(b1, dtype=jnp.float64)
+        a2_j = jnp.array(a2, dtype=jnp.float64)
+        b2_j = jnp.array(b2, dtype=jnp.float64)
+        Q, q, _ = get_cost_terms(a1_j, b1_j, a2_j, b2_j)
+        z = active_set_qp(Q, q)
+        p1 = np.asarray(b1_j + z[0] * (a1_j - b1_j))
+        p2 = np.asarray(b2_j + z[1] * (a2_j - b2_j))
+
+        return phi, A_row, b_val, p1, p2
