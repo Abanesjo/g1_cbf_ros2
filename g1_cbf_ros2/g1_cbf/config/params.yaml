@@ -1,9 +1,9 @@
 g1_cbf_node:
   ros__parameters:
-    use_gpu: false
+    use_gpu: true
     
     dt: 0.01
-    collision_geometry: "boxes" #or capsules or 'boxes'
+    collision_geometry: "capsules" #or capsules or 'boxes'
     
     #capsule margin
     margin_phi: 0.001 #[m^2], related to minimum squared distance
@@ -15,6 +15,6 @@ g1_cbf_node:
     gamma: 5.0
 
     #speed gain
-    K: 3.0
-    max_velocity: 5.0
+    K: 5.0
+    max_velocity: 0.5
     lpf_gain: 0.0
