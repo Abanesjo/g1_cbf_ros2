@@ -28,18 +28,21 @@ _COLLISION_BODIES = {
         'offset_xyz': np.array([0.0, 0.0, 0.22]),
         'offset_rpy': np.array([0.0, 0.0, 0.0]),
         'semi_axes': (0.08, 0.085, 0.2625),
+        'type': 'box',
     },
     'left_arm': {
         'frame': 'left_elbow_link',
         'offset_xyz': np.array([0.15, 0.001, -0.005]),
         'offset_rpy': np.array([0.0, np.pi / 2, 0.0]),
-        'semi_axes': (0.26, 0.06, 0.06),
+        'semi_axes': (0.26, 0.03, 0.03),
+        'type': 'ellipsoid',
     },
     'right_arm': {
         'frame': 'right_elbow_link',
         'offset_xyz': np.array([0.15, -0.001, -0.005]),
         'offset_rpy': np.array([0.0, np.pi / 2, 0.0]),
-        'semi_axes': (0.26, 0.06, 0.06),
+        'semi_axes': (0.26, 0.03, 0.03),
+        'type': 'ellipsoid',
     },
 }
 

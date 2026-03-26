@@ -1,44 +1,29 @@
-"""CBF solver: minimum scaling alpha, gradient via implicit differentiation.
+"""CBF solver: minimum scaling alpha, gradient via implicit diff.
 
-Generalizes g1_cbf/python_cbf/cbf_solver.py from 2D to 3D.
-Reference: Dai et al., "Safe Navigation and Obstacle Avoidance Using
-Differentiable Optimization Based Control Barrier Functions", RA-L 2023.
+Handles ellipsoid-ellipsoid (1D Newton) and box-ellipsoid
+(analytical per-face, from Dai et al. RA-L 2023 eq 41).
 """
 
 import numpy as np
-from g1_cbf.scaling import Ellipsoid3D
-
-
-def _skew(v: np.ndarray) -> np.ndarray:
-    """Skew-symmetric matrix [v]_x such that [v]_x @ w = v x w."""
-    return np.array([
-        [0, -v[2], v[1]],
-        [v[2], 0, -v[0]],
-        [-v[1], v[0], 0],
-    ])
+from g1_cbf.scaling import Ellipsoid3D, BoxBody3D, _skew
 
 
 class EllipsoidCBF3D:
-    """Computes minimum scaling factor alpha between two 3D ellipsoids
-    and its gradient w.r.t. joint configuration via implicit differentiation.
-    """
+    """CBF for 3D collision body pairs."""
 
     def __init__(self, beta: float = 1.05, gamma: float = 5.0):
         self.beta = beta
         self.gamma = gamma
 
-    @staticmethod
-    def solve_alpha(
-        ellA: Ellipsoid3D, ellB: Ellipsoid3D, nu_init: float = 0.5
-    ) -> tuple:
-        """Find minimum uniform scaling alpha* via 1-D Newton on KKT.
+    # ----------------------------------------------------------
+    # Ellipsoid-ellipsoid (existing, fast 1D Newton)
+    # ----------------------------------------------------------
 
-        At the optimum, F_A(p*) = F_B(p*) = alpha*.
-        Returns (alpha, p_star, nuA).
-        """
+    @staticmethod
+    def _solve_ellipsoid(ellA, ellB, nu_init):
+        """1D Newton on KKT dual for two ellipsoids."""
         cA, MA = ellA.center, ellA.M
         cB, MB = ellB.center, ellB.M
-
         nuA = np.clip(nu_init, 0.01, 0.99)
 
         for _ in range(30):
@@ -56,128 +41,272 @@ class EllipsoidCBF3D:
             if abs(res) < 1e-12:
                 break
 
-            dp = np.linalg.solve(Mc, MA @ cA - MB @ cB - (MA - MB) @ p)
-            dres = 2.0 * dA @ MA @ dp - 2.0 * dB @ MB @ dp
+            dp = np.linalg.solve(
+                Mc,
+                MA @ cA - MB @ cB - (MA - MB) @ p,
+            )
+            dres = (
+                2.0 * dA @ MA @ dp
+                - 2.0 * dB @ MB @ dp
+            )
             if abs(dres) < 1e-15:
                 break
 
-            nuA = np.clip(nuA - res / dres, 0.001, 0.999)
+            nuA = np.clip(
+                nuA - res / dres, 0.001, 0.999,
+            )
 
         nuB = 1.0 - nuA
         Mc = nuA * MA + nuB * MB
-        p_star = np.linalg.solve(Mc, nuA * MA @ cA + nuB * MB @ cB)
-        alpha = float((p_star - cA) @ MA @ (p_star - cA))
+        p_star = np.linalg.solve(
+            Mc, nuA * MA @ cA + nuB * MB @ cB,
+        )
+        alpha = float(
+            (p_star - cA) @ MA @ (p_star - cA)
+        )
         return alpha, p_star, nuA
 
     @staticmethod
-    def compute_dalpha_dq(
-        p: np.ndarray,
-        alpha: float,
-        nuA: float,
-        ellA: Ellipsoid3D,
-        ellB: Ellipsoid3D,
-        J_A: np.ndarray,
-        J_B: np.ndarray,
-    ) -> np.ndarray:
-        """Compute dalpha/dq (n_q,) via implicit differentiation of KKT.
-
-        Parameters
-        ----------
-        p : (3,) optimal intersection point
-        alpha : scalar optimal scaling
-        nuA : scalar KKT dual variable
-        ellA, ellB : Ellipsoid3D objects with current poses
-        J_A : (6, n_q) Jacobian at ellipsoid A center [trans; rot]
-        J_B : (6, n_q) Jacobian at ellipsoid B center [trans; rot]
-
-        Returns
-        -------
-        dalpha_dq : (n_q,)
-        """
+    def _dalpha_ellipsoid(
+        p, alpha, nuA, ellA, ellB, J_A, J_B,
+    ):
+        """dalpha/dq for two ellipsoids via 5x5 KKT."""
         nuB = 1.0 - nuA
         MA, MB = ellA.M, ellB.M
-        cA, cB = ellA.center, ellB.center
-        dA = p - cA
-        dB = p - cB
+        dA = p - ellA.center
+        dB = p - ellB.center
         n_q = J_A.shape[1]
 
-        # Build dg/dz (5x5) for KKT system:
-        # g1: 2*nu*MA*(p-cA) + 2*(1-nu)*MB*(p-cB) = 0  [3]
-        # g2: (p-cA)^T MA (p-cA) - alpha = 0            [1]
-        # g3: (p-cB)^T MB (p-cB) - alpha = 0            [1]
-        # z = [p(3), alpha(1), nu(1)]
         Dz = np.zeros((5, 5))
         Dz[:3, :3] = 2 * nuA * MA + 2 * nuB * MB
-        Dz[:3, 3] = 0.0  # dg1/dalpha
-        Dz[:3, 4] = 2 * MA @ dA - 2 * MB @ dB  # dg1/dnu
-        Dz[3, :3] = 2 * dA @ MA                  # dg2/dp
-        Dz[3, 3] = -1.0                           # dg2/dalpha
-        Dz[3, 4] = 0.0                            # dg2/dnu
-        Dz[4, :3] = 2 * dB @ MB                  # dg3/dp
-        Dz[4, 3] = -1.0                           # dg3/dalpha
-        Dz[4, 4] = 0.0                            # dg3/dnu
+        Dz[:3, 4] = 2 * MA @ dA - 2 * MB @ dB
+        Dz[3, :3] = 2 * dA @ MA
+        Dz[3, 3] = -1.0
+        Dz[4, :3] = 2 * dB @ MB
+        Dz[4, 3] = -1.0
 
-        # Solve (dg/dz)^T @ lam = e_alpha once
         e_alpha = np.zeros(5)
         e_alpha[3] = 1.0
-        lam = np.linalg.solve(Dz.T, e_alpha)  # (5,)
+        try:
+            lam = np.linalg.solve(Dz.T, e_alpha)
+        except np.linalg.LinAlgError:
+            return np.zeros(n_q)
 
-        # For each joint qi, compute dg/dqi (5-vector) and
-        # dalpha/dqi = -lam^T @ dg/dqi
         dalpha_dq = np.zeros(n_q)
-
         for i in range(n_q):
-            dg_dqi = np.zeros(5)
-            # Contribution from body A
-            Jt_A = J_A[:3, i]  # translational Jacobian column
-            Jr_A = J_A[3:, i]  # rotational Jacobian column
-            # dcA/dqi = Jt_A
-            # dMA/dqi = skew(Jr_A) @ MA - MA @ skew(Jr_A)
+            Jt_A, Jr_A = J_A[:3, i], J_A[3:, i]
+            Jt_B, Jr_B = J_B[:3, i], J_B[3:, i]
             S_A = _skew(Jr_A)
-            dMA_dqi = S_A @ MA - MA @ S_A
-
-            # g1 depends on MA and cA:
-            # d/dqi [2*nu*MA*(p-cA)] = 2*nu*(dMA*(p-cA) + MA*(-dcA))
-            dg_dqi[:3] += 2 * nuA * (dMA_dqi @ dA - MA @ Jt_A)
-            # g2: d/dqi [(p-cA)^T MA (p-cA)] = dA^T dMA dA - 2 dA^T MA dcA
-            dg_dqi[3] += dA @ dMA_dqi @ dA - 2 * dA @ MA @ Jt_A
-
-            # Contribution from body B
-            Jt_B = J_B[:3, i]
-            Jr_B = J_B[3:, i]
+            dMA = S_A @ MA - MA @ S_A
             S_B = _skew(Jr_B)
-            dMB_dqi = S_B @ MB - MB @ S_B
+            dMB = S_B @ MB - MB @ S_B
 
-            # g1: d/dqi [2*(1-nu)*MB*(p-cB)]
-            dg_dqi[:3] += 2 * nuB * (dMB_dqi @ dB - MB @ Jt_B)
-            # g3: d/dqi [(p-cB)^T MB (p-cB)]
-            dg_dqi[4] += dB @ dMB_dqi @ dB - 2 * dB @ MB @ Jt_B
-
-            dalpha_dq[i] = -lam @ dg_dqi
+            dg = np.zeros(5)
+            dg[:3] = (
+                2 * nuA * (dMA @ dA - MA @ Jt_A)
+                + 2 * nuB * (dMB @ dB - MB @ Jt_B)
+            )
+            dg[3] = (
+                dA @ dMA @ dA - 2 * dA @ MA @ Jt_A
+            )
+            dg[4] = (
+                dB @ dMB @ dB - 2 * dB @ MB @ Jt_B
+            )
+            dalpha_dq[i] = -lam @ dg
 
         return dalpha_dq
 
+    # ----------------------------------------------------------
+    # Box-ellipsoid (analytical per-face solver)
+    # ----------------------------------------------------------
+
+    @staticmethod
+    def _solve_box_ell(box, ell):
+        """Analytical alpha for box-ellipsoid pair.
+
+        Tries all 6 faces of the box. For each face with
+        world normal n and half-dim h:
+          e = n^T (c_ell - c_box)
+          d = M_inv @ n,  q = n^T d
+          k = (-1 + sqrt(1 + 4he/q)) / (2h)
+          alpha = k^2 q,  p = c_ell - k d
+
+        Returns (alpha, p, n, h, lam, nu).
+        """
+        M_inv = ell.M_inv
+        c_ell = ell.center
+        c_box = box.center
+        hd = box.half_dims
+
+        best = None
+
+        for axis in range(3):
+            h = hd[axis]
+            for sign in (+1.0, -1.0):
+                n = sign * box.R[:, axis]
+                e = n @ (c_ell - c_box)
+                d = M_inv @ n
+                q = n @ d
+
+                disc = 1.0 + 4.0 * h * e / q
+                if disc < 0:
+                    continue
+                k = (-1.0 + np.sqrt(disc)) / (2.0 * h)
+                if k <= 1e-12:
+                    continue
+
+                alpha = k * k * q
+                p = c_ell - k * d
+
+                # Check other face constraints
+                xl = box.R.T @ (p - c_box)
+                ok = True
+                for j in range(3):
+                    if abs(xl[j]) > alpha * hd[j] + 1e-8:
+                        ok = False
+                        break
+
+                if ok and (
+                    best is None or alpha < best[0]
+                ):
+                    nu = 1.0 / (2.0 * k * h + 1.0)
+                    lam = 2.0 * k * nu
+                    best = (
+                        alpha, p.copy(), n.copy(),
+                        h, lam, nu,
+                    )
+
+        if best is None:
+            # Fallback: bodies overlapping
+            mid = 0.5 * (c_ell + c_box)
+            return (0.0, mid, box.R[:, 0], hd[0], 0.5, 0.5)
+
+        return best
+
+    @staticmethod
+    def _dalpha_box_ell(
+        p, alpha, n, h, lam, nu,
+        box, ell, J_box, J_ell,
+    ):
+        """dalpha/dq for box-ellipsoid via 6x6 KKT.
+
+        KKT system:
+          g1: lam*n + 2*nu*M*(p-c_ell) = 0      [3]
+          g2: n^T(p-c_box) - alpha*h = 0         [1]
+          g3: (p-c_ell)^T M (p-c_ell) - alpha = 0 [1]
+          g4: lam*h + nu - 1 = 0                  [1]
+        """
+        M = ell.M
+        d_ell = p - ell.center
+        n_q = J_box.shape[1]
+
+        # Dz (6x6)
+        Dz = np.zeros((6, 6))
+        Dz[:3, :3] = 2.0 * nu * M
+        # Dz[:3, 3] = 0 (dg1/dalpha)
+        Dz[:3, 4] = n
+        Dz[:3, 5] = 2.0 * M @ d_ell
+        Dz[3, :3] = n
+        Dz[3, 3] = -h
+        Dz[4, :3] = 2.0 * d_ell @ M
+        Dz[4, 3] = -1.0
+        Dz[5, 4] = h
+        Dz[5, 5] = 1.0
+
+        e_a = np.zeros(6)
+        e_a[3] = 1.0
+        try:
+            xi = np.linalg.solve(Dz.T, e_a)
+        except np.linalg.LinAlgError:
+            return np.zeros(n_q)
+
+        dalpha = np.zeros(n_q)
+
+        for i in range(n_q):
+            Jt_T = J_box[:3, i]
+            Jr_T = J_box[3:, i]
+            Jt_A = J_ell[:3, i]
+            Jr_A = J_ell[3:, i]
+
+            # Box: dn/dqi, dc_box/dqi
+            dn = _skew(Jr_T) @ n
+            dc_box = Jt_T
+
+            # Ell: dM/dqi, dc_ell/dqi
+            S_A = _skew(Jr_A)
+            dM = S_A @ M - M @ S_A
+            dc_ell = Jt_A
+
+            dg = np.zeros(6)
+            # dg1 = lam*dn + 2nu*(dM*d_ell - M*dc_ell)
+            dg[:3] = (
+                lam * dn
+                + 2.0 * nu * (dM @ d_ell - M @ dc_ell)
+            )
+            # dg2 = dn^T(p-c_box) - n^T dc_box
+            dg[3] = (
+                dn @ (p - box.center) - n @ dc_box
+            )
+            # dg3 = d_ell^T dM d_ell - 2 d_ell^T M dc_ell
+            dg[4] = (
+                d_ell @ dM @ d_ell
+                - 2.0 * d_ell @ M @ dc_ell
+            )
+            # dg4 = 0
+
+            dalpha[i] = -xi @ dg
+
+        return dalpha
+
+    # ----------------------------------------------------------
+    # Dispatch
+    # ----------------------------------------------------------
+
     def build_constraint(
-        self,
-        ellA: Ellipsoid3D,
-        ellB: Ellipsoid3D,
-        J_A: np.ndarray,
-        J_B: np.ndarray,
-        nu_warm: float,
-    ) -> tuple:
+        self, bodyA, bodyB, J_A, J_B,
+        nu_warm, p_warm=None,
+    ):
         """Build one CBF constraint for a collision pair.
 
-        Returns (alpha, A_row, b_val, nu_warm_out) where the constraint is:
-            A_row @ dq >= b_val
-        i.e.  dalpha/dq @ dq >= -gamma * (alpha - beta)
+        Returns (alpha, A_row, b_val, nu_out, p_star).
         """
-        alpha, p_star, nuA = self.solve_alpha(ellA, ellB, nu_warm)
-        dalpha_dq = self.compute_dalpha_dq(
-            p_star, alpha, nuA, ellA, ellB, J_A, J_B
+        both_ell = (
+            isinstance(bodyA, Ellipsoid3D)
+            and isinstance(bodyB, Ellipsoid3D)
+        )
+
+        if both_ell:
+            alpha, p_star, nuA = self._solve_ellipsoid(
+                bodyA, bodyB, nu_warm,
+            )
+            dalpha = self._dalpha_ellipsoid(
+                p_star, alpha, nuA,
+                bodyA, bodyB, J_A, J_B,
+            )
+            h = alpha - self.beta
+            return (
+                alpha, dalpha, -self.gamma * h,
+                nuA, p_star,
+            )
+
+        # Box-ellipsoid: identify which is which
+        if isinstance(bodyA, BoxBody3D):
+            box, ell = bodyA, bodyB
+            J_box, J_ell = J_A, J_B
+        else:
+            box, ell = bodyB, bodyA
+            J_box, J_ell = J_B, J_A
+
+        result = self._solve_box_ell(box, ell)
+        alpha, p_star, n_f, h_f, lam_f, nu_f = result
+
+        dalpha = self._dalpha_box_ell(
+            p_star, alpha, n_f, h_f, lam_f, nu_f,
+            box, ell, J_box, J_ell,
         )
 
         h = alpha - self.beta
-        A_row = dalpha_dq          # (n_q,)
-        b_val = -self.gamma * h    # scalar
-
-        return alpha, A_row, b_val, nuA
+        return (
+            alpha, dalpha, -self.gamma * h,
+            nu_warm, p_star,
+        )
