@@ -26,21 +26,22 @@ _COLLISION_BODIES = {
     'torso': {
         'frame': 'torso_link',
         'offset_xyz': np.array([0.0, 0.0, 0.22]),
-        'offset_rpy': np.array([0.0, 0.0, 0.0]),
+        'offset_rot': Rotation.identity(),
         'half_length': 0.2775,
         'radius': 0.1,
     },
     'left_arm': {
         'frame': 'left_elbow_link',
         'offset_xyz': np.array([0.15, 0.001, -0.005]),
-        'offset_rpy': np.array([0.0, np.pi / 2, 0.0]),
+        # Align Z along arm (pitch 90), then spin cross-section 45 deg
+        'offset_rot': Rotation.from_euler('y', np.pi / 2) * Rotation.from_euler('z', np.pi / 4),
         'half_length': 0.20,
         'radius': 0.05,
     },
     'right_arm': {
         'frame': 'right_elbow_link',
         'offset_xyz': np.array([0.15, -0.001, -0.005]),
-        'offset_rpy': np.array([0.0, np.pi / 2, 0.0]),
+        'offset_rot': Rotation.from_euler('y', np.pi / 2) * Rotation.from_euler('z', np.pi / 4),
         'half_length': 0.20,
         'radius': 0.05,
     },
@@ -79,7 +80,7 @@ class G1Kinematics:
         # Precompute collision body offset SE3 transforms
         self.offset_se3 = {}
         for name, body in _COLLISION_BODIES.items():
-            R_off = Rotation.from_euler('xyz', body['offset_rpy']).as_matrix()
+            R_off = body['offset_rot'].as_matrix()
             self.offset_se3[name] = pin.SE3(R_off, body['offset_xyz'])
 
         # Map controlled joint names to pinocchio q-vector indices
