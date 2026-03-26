@@ -48,14 +48,14 @@ _COLLISION_BODIES = {
         'offset_xyz': np.array([0.0, 0.0, 0.03]),
         'offset_rot': Rotation.identity(),
         'half_length': 0.15,
-        'radius': 0.05,
+        'radius': 0.065,
     },
     'right_thigh': {
         'frame': 'right_hip_yaw_link',
         'offset_xyz': np.array([0.0, 0.0, 0.03]),
         'offset_rot': Rotation.identity(),
         'half_length': 0.15,
-        'radius': 0.05,
+        'radius': 0.065,
     },
 }
 
