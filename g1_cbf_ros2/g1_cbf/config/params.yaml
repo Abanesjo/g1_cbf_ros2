@@ -1,5 +1,7 @@
 g1_cbf_node:
   ros__parameters:
+    use_gpu: false
+    
     dt: 0.01
     collision_geometry: "capsules" #or capsules or 'boxes'
     

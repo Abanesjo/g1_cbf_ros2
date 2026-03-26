@@ -8,12 +8,12 @@ self-collisions between torso and arms, publishes safe commands on
 Supports capsule and box collision geometry via collision_geometry param.
 """
 
+import os
 import numpy as np
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import JointState
 
-from g1_cbf.cbf import DpaxCapsuleCBF, DpaxBoxCBF
 from g1_cbf.kinematics import G1Kinematics, CONTROLLED_JOINTS, COLLISION_PAIRS
 from g1_cbf.qp_solver import CBFQPSolver
 from g1_cbf.collider_viz import ColliderVisualizer
@@ -33,6 +33,12 @@ class G1CBFNode(Node):
         self.declare_parameter('lpf_gain', 0.1)
         self.declare_parameter('urdf_path', '')
         self.declare_parameter('collision_geometry', 'capsules')
+        self.declare_parameter('use_gpu', False)
+
+        # Set JAX platform before importing cbf module
+        use_gpu = self.get_parameter('use_gpu').value
+        os.environ['JAX_PLATFORMS'] = 'cuda' if use_gpu else 'cpu'
+        from g1_cbf.cbf import DpaxCapsuleCBF, DpaxBoxCBF  # noqa: E402
 
         dt = self.get_parameter('dt').value
         gamma = self.get_parameter('gamma').value
