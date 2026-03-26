@@ -4,6 +4,7 @@ Control Barrier function for the Unitree G1 upper body control.
 
 ## Installation and Usage
 ```
+git clone --recurse-submodules https://github.com/Abanesjo/g1_cbf_ros2
 ./build_and_run.sh
 ```
 
