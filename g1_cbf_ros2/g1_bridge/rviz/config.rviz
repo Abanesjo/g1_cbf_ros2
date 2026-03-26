@@ -13,10 +13,8 @@ Panels:
         - /Unsafe Robot1/Description Topic1
         - /Robot Colliders1
         - /Collision Distances1
+        - /Collision Distances1/Namespaces1
         - /Obstacle Markers1
-        - /Obstacle Markers1/Status1
-        - /Obstacle Markers1/Topic1
-        - /TF1
         - /TF1/Frames1
       Splitter Ratio: 0.5
     Tree Height: 910
@@ -558,6 +556,8 @@ Visualization Manager:
       Frame Timeout: 15
       Frames:
         All Enabled: false
+        Camera:
+          Value: true
         camera_frame:
           Value: true
         d435_link:
@@ -727,6 +727,10 @@ Visualization Manager:
       Show Names: true
       Tree:
         pelvis:
+          Camera:
+            {}
+          camera_frame:
+            {}
           ghost/pelvis:
             ghost/imu_in_pelvis:
               {}
@@ -801,8 +805,7 @@ Visualization Manager:
             waist_roll_link:
               torso_link:
                 d435_link:
-                  camera_frame:
-                    {}
+                  {}
                 head_link:
                   {}
                 imu_in_torso:
@@ -879,25 +882,25 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz_default_plugins/Orbit
-      Distance: 2.6464364528656006
+      Distance: 4.285093307495117
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
         Swap Stereo Eyes: false
         Value: false
       Focal Point:
-        X: 0.266171395778656
-        Y: 0.6193418502807617
-        Z: 0.5456826090812683
+        X: 0.6716815233230591
+        Y: -0.3083946406841278
+        Z: 0.4199916124343872
       Focal Shape Fixed Size: true
       Focal Shape Size: 0.05000000074505806
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 0.0552031472325325
+      Pitch: 0.575203537940979
       Target Frame: <Fixed Frame>
       Value: Orbit (rviz)
-      Yaw: 1.65367591381073
+      Yaw: 0.03867003321647644
     Saved: ~
 Window Geometry:
   Displays:
