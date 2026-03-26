@@ -19,4 +19,9 @@
       <remap from="joint_states" to="/ghost/joint_states"/>
     </node>
   </group>
+
+  <!-- Obstacle Detection -->
+  <node pkg="tf2_ros" exec="static_transform_publisher" name="d435_to_camera"
+      args="0 0 0 -1.5708 0 0 d435_link camera_frame" />
+  <node pkg="g1_cbf" exec="bbox_node" name="bbox_node" output="screen"/>
 </launch>
