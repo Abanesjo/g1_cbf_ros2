@@ -1,8 +1,7 @@
-"""MarkerArray publisher for collision capsule visualization.
+"""MarkerArray publisher for collision geometry visualization.
 
-Publishes /robot_colliders with all bodies as capsules
-(cylinder + 2 spheres) at scale 1.0 — exactly matching
-the CBF geometry.
+Publishes /robot_colliders with all bodies as capsules or boxes,
+exactly matching the CBF geometry.
 """
 
 from scipy.spatial.transform import Rotation as Rot
@@ -19,10 +18,11 @@ _COLORS = {
 
 
 class ColliderVisualizer:
-    """Publishes MarkerArray for collision capsules."""
+    """Publishes MarkerArray for collision geometry."""
 
-    def __init__(self, node, kinematics):
+    def __init__(self, node, kinematics, geometry_type='capsules'):
         self.kin = kinematics
+        self.geometry_type = geometry_type
         self.pub = node.create_publisher(
             MarkerArray, '/robot_colliders', 10,
         )
@@ -31,7 +31,12 @@ class ColliderVisualizer:
         )
 
     def publish(self, stamp):
-        """Publish capsule markers using current FK state."""
+        if self.geometry_type == 'boxes':
+            self._publish_boxes(stamp)
+        else:
+            self._publish_capsules(stamp)
+
+    def _publish_capsules(self, stamp):
         msg = MarkerArray()
         mid = 0
 
@@ -44,30 +49,48 @@ class ColliderVisualizer:
 
             center, rot = self.kin.get_collision_pose(name)
             quat = Rot.from_matrix(rot).as_quat()
-            axis = rot[:, 2]  # capsule long axis
+            axis = rot[:, 2]
 
-            # Cylinder shaft
             diam = 2.0 * radius
             m = self._make_marker(
                 stamp, mid, Marker.CYLINDER,
-                center, quat,
-                diam, diam, shaft_len,
-                color,
+                center, quat, diam, diam, shaft_len, color,
             )
             msg.markers.append(m)
             mid += 1
 
-            # Hemisphere spheres at +/- ends
             for sign in (+1, -1):
                 sph_c = center + sign * seg_half * axis
                 m = self._make_marker(
                     stamp, mid, Marker.SPHERE,
-                    sph_c, quat,
-                    diam, diam, diam,
-                    color,
+                    sph_c, quat, diam, diam, diam, color,
                 )
                 msg.markers.append(m)
                 mid += 1
+
+        self.pub.publish(msg)
+
+    def _publish_boxes(self, stamp):
+        msg = MarkerArray()
+        mid = 0
+
+        for name, body in self.kin.collision_bodies.items():
+            radius = body['radius']
+            half_len = body['half_length']
+            color = _COLORS.get(name, (0.5, 0.5, 0.5, 0.3))
+
+            center, rot = self.kin.get_collision_pose(name)
+            quat = Rot.from_matrix(rot).as_quat()
+
+            # Box: X,Y = 2*radius, Z = 2*half_length
+            m = self._make_marker(
+                stamp, mid, Marker.CUBE,
+                center, quat,
+                2.0 * radius, 2.0 * radius, 2.0 * half_len,
+                color,
+            )
+            msg.markers.append(m)
+            mid += 1
 
         self.pub.publish(msg)
 
@@ -100,10 +123,7 @@ class ColliderVisualizer:
         return m
 
     def publish_distances(self, stamp, closest_points):
-        """Publish line segments between closest points of each pair.
-
-        closest_points: list of (p1, p2) numpy arrays
-        """
+        """Publish line segments between closest points."""
         msg = MarkerArray()
         for i, (p1, p2) in enumerate(closest_points):
             m = Marker()

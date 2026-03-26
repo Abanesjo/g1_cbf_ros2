@@ -1,8 +1,17 @@
 g1_cbf_node:
   ros__parameters:
     dt: 0.01
+    collision_geometry: "capsules" #or capsules or 'boxes'
+    
+    #capsule margin
     margin_phi: 0.001
+    #box margin (capsule/box don't use same method, so scales not the same)
+    beta: 1.05
+
+    #cbf constant
     gamma: 5.0
-    K: 5.0
-    max_velocity: 5.0
+
+    #speed gain
+    K: 3.0
+    max_velocity: 0.5
     lpf_gain: 0.0
