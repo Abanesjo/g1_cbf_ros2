@@ -4,9 +4,10 @@ g1_cbf_node:
     collision_geometry: "capsules" #or capsules or 'boxes'
     
     #capsule margin
-    margin_phi: 0.001
+    margin_phi: 0.001 #[m^2], related to minimum squared distance
+
     #box margin (capsule/box don't use same method, so scales not the same)
-    beta: 1.05
+    beta: 1.05 #[scalar] related to minimum scaling factor
 
     #cbf constant
     gamma: 5.0
