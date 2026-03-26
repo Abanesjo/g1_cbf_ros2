@@ -27,22 +27,22 @@ _COLLISION_BODIES = {
         'frame': 'torso_link',
         'offset_xyz': np.array([0.0, 0.0, 0.22]),
         'offset_rpy': np.array([0.0, 0.0, 0.0]),
-        'half_length': 0.2625,
-        'radius': 0.085,
+        'half_length': 0.2775,
+        'radius': 0.1,
     },
     'left_arm': {
         'frame': 'left_elbow_link',
         'offset_xyz': np.array([0.15, 0.001, -0.005]),
         'offset_rpy': np.array([0.0, np.pi / 2, 0.0]),
-        'half_length': 0.26,
-        'radius': 0.03,
+        'half_length': 0.20,
+        'radius': 0.05,
     },
     'right_arm': {
         'frame': 'right_elbow_link',
         'offset_xyz': np.array([0.15, -0.001, -0.005]),
         'offset_rpy': np.array([0.0, np.pi / 2, 0.0]),
-        'half_length': 0.26,
-        'radius': 0.03,
+        'half_length': 0.20,
+        'radius': 0.05,
     },
 }
 
