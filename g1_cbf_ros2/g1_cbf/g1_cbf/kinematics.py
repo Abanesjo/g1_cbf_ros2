@@ -14,20 +14,18 @@ CONTROLLED_JOINTS = [
     'waist_pitch_joint',
     'left_shoulder_pitch_joint',
     'left_shoulder_roll_joint',
-    'left_shoulder_yaw_joint',
     'left_elbow_joint',
     'right_shoulder_pitch_joint',
     'right_shoulder_roll_joint',
-    'right_shoulder_yaw_joint',
     'right_elbow_joint',
 ]
 
 _COLLISION_BODIES = {
     'torso': {
         'frame': 'torso_link',
-        'offset_xyz': np.array([0.0, 0.0, 0.22]),
+        'offset_xyz': np.array([0.0, 0.0, 0.16]),
         'offset_rot': Rotation.identity(),
-        'half_length': 0.2775,
+        'half_length': 0.33,
         'radius': 0.1,
     },
     'left_arm': {
@@ -69,8 +67,6 @@ COLLISION_PAIRS = [
     ('left_arm', 'right_thigh'),
     ('right_arm', 'left_thigh'),
     ('right_arm', 'right_thigh'),
-    ('left_thigh', 'torso'),
-    ('right_thigh', 'torso'),
 ]
 
 

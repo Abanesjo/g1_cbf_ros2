@@ -38,9 +38,10 @@ class G1CBFNode(Node):
         self.declare_parameter('collision_geometry', 'capsules')
         self.declare_parameter('use_gpu', False)
 
-        # Set JAX platform before importing cbf module
+        # Set JAX config before importing cbf module
         use_gpu = self.get_parameter('use_gpu').value
         os.environ['JAX_PLATFORMS'] = 'cuda' if use_gpu else 'cpu'
+        os.environ['JAX_ENABLE_X64'] = '1'
         from g1_cbf.cbf import DpaxCapsuleCBF, DpaxBoxCBF  # noqa: E402
 
         dt = self.get_parameter('dt').value
@@ -92,11 +93,11 @@ class G1CBFNode(Node):
         self.tf_buffer = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
 
-        # Velocity limits (rad/s)
+        # Velocity limits (rad/s) from URDF (hardware constraints)
         self.dq_max = np.array([
-            30.0, 30.0,
-            37.0, 37.0, 37.0, 37.0,
-            37.0, 37.0, 37.0, 37.0,
+            30.0, 30.0,                               # waist roll/pitch
+            37.0, 37.0, 37.0,                         # L shoulder pitch/roll, elbow
+            37.0, 37.0, 37.0,                         # R shoulder pitch/roll, elbow
         ])
         self.dq_min = -self.dq_max
 
@@ -240,12 +241,12 @@ class G1CBFNode(Node):
             constraints.append((A_row, b_val))
             closest_points.append((p1, p2))
 
-            margin_phi = self.get_parameter('margin_phi').value
-            if phi < 3.0 * margin_phi:
-                self.get_logger().info(
-                    f'phi_min={phi:.6f} margin={margin_phi}',
-                    throttle_duration_sec=0.2,
-                )
+            # margin_phi = self.get_parameter('margin_phi').value
+            # if phi < 3.0 * margin_phi:
+            #     self.get_logger().info(
+            #         f'phi_min={phi:.6f} margin={margin_phi}',
+            #         throttle_duration_sec=0.2,
+            #     )
 
     def _build_box_constraints(self, constraints, closest_points,
                                metric_min):
@@ -265,12 +266,12 @@ class G1CBFNode(Node):
             constraints.append((A_row, b_val))
             closest_points.append((p1, p2))
 
-            beta = self.get_parameter('beta').value
-            if alpha < 1.5 * beta:
-                self.get_logger().info(
-                    f'alpha={alpha:.4f} beta={beta}',
-                    throttle_duration_sec=0.2,
-                )
+            # beta = self.get_parameter('beta').value
+            # if alpha < 1.5 * beta:
+            #     self.get_logger().info(
+            #         f'alpha={alpha:.4f} beta={beta}',
+            #         throttle_duration_sec=0.2,
+            #     )
 
     def _bbox_cb(self, msg: Detection3DArray):
         obstacles = []
@@ -345,11 +346,11 @@ class G1CBFNode(Node):
                 constraints.append((A_row, b_val))
                 closest_points.append((p1, p2))
 
-                if alpha < 1.5 * beta:
-                    self.get_logger().info(
-                        f'obstacle alpha={alpha:.4f} body={body_name}',
-                        throttle_duration_sec=0.2,
-                    )
+                # if alpha < 1.5 * beta:
+                #     self.get_logger().info(
+                #         f'obstacle alpha={alpha:.4f} body={body_name}',
+                #         throttle_duration_sec=0.2,
+                #     )
 
     def _extract_controlled(self, msg: JointState):
         name_to_pos = dict(zip(msg.name, msg.position))
