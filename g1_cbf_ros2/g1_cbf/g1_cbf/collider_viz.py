@@ -125,6 +125,7 @@ class ColliderVisualizer:
     def publish_distances(self, stamp, closest_points):
         """Publish line segments between closest points."""
         msg = MarkerArray()
+        n = len(closest_points)
         for i, (p1, p2) in enumerate(closest_points):
             m = Marker()
             m.header.frame_id = 'pelvis'
@@ -142,4 +143,17 @@ class ColliderVisualizer:
                 x=float(p2[0]), y=float(p2[1]), z=float(p2[2]),
             ))
             msg.markers.append(m)
+
+        # Delete stale markers from previous frames
+        prev = getattr(self, '_prev_n_distances', 0)
+        for j in range(n, prev):
+            m = Marker()
+            m.header.frame_id = 'pelvis'
+            m.header.stamp = stamp
+            m.ns = 'distances'
+            m.id = j
+            m.action = Marker.DELETE
+            msg.markers.append(m)
+        self._prev_n_distances = n
+
         self.dist_pub.publish(msg)

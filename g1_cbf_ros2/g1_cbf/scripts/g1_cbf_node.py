@@ -13,6 +13,9 @@ import numpy as np
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import JointState
+from vision_msgs.msg import Detection3DArray
+from scipy.spatial.transform import Rotation as Rot
+import tf2_ros
 
 from g1_cbf.kinematics import G1Kinematics, CONTROLLED_JOINTS, COLLISION_PAIRS
 from g1_cbf.qp_solver import CBFQPSolver
@@ -82,6 +85,12 @@ class G1CBFNode(Node):
         self.q_des_latest = None
         self.q_des_filtered = None
         self.q_cbf_target = None
+        self._obstacles = []  # list of {center, rot, half_extents}
+        self._zero_J6 = np.zeros((6, self.kin.n_q))
+
+        # TF for obstacle frame conversion
+        self.tf_buffer = tf2_ros.Buffer()
+        self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
 
         # Velocity limits (rad/s)
         self.dq_max = np.array([
@@ -99,6 +108,10 @@ class G1CBFNode(Node):
         self.create_subscription(
             JointState, '/joint_commands_unsafe',
             self._unsafe_cmd_cb, 10,
+        )
+        self.create_subscription(
+            Detection3DArray, '/bbox_3d',
+            self._bbox_cb, 10,
         )
 
         # Publisher
@@ -163,6 +176,9 @@ class G1CBFNode(Node):
         if self.geom_type == 'boxes':
             self._build_box_constraints(
                 constraints, closest_points, metric_min,
+            )
+            self._build_obstacle_constraints(
+                constraints, closest_points,
             )
         else:
             self._build_capsule_constraints(
@@ -255,6 +271,85 @@ class G1CBFNode(Node):
                     f'alpha={alpha:.4f} beta={beta}',
                     throttle_duration_sec=0.2,
                 )
+
+    def _bbox_cb(self, msg: Detection3DArray):
+        obstacles = []
+        for det in msg.detections:
+            frame_id = det.header.frame_id or msg.header.frame_id
+            try:
+                tf = self.tf_buffer.lookup_transform(
+                    'pelvis', frame_id,
+                    rclpy.time.Time(),
+                    timeout=rclpy.duration.Duration(seconds=0.05),
+                )
+            except (tf2_ros.LookupException,
+                    tf2_ros.ConnectivityException,
+                    tf2_ros.ExtrapolationException):
+                continue
+
+            # Transform obstacle center to pelvis frame
+            t = tf.transform
+            tf_pos = np.array([
+                t.translation.x, t.translation.y, t.translation.z,
+            ])
+            tf_rot = Rot.from_quat([
+                t.rotation.x, t.rotation.y,
+                t.rotation.z, t.rotation.w,
+            ]).as_matrix()
+
+            det_pos = np.array([
+                det.bbox.center.position.x,
+                det.bbox.center.position.y,
+                det.bbox.center.position.z,
+            ])
+            det_rot = Rot.from_quat([
+                det.bbox.center.orientation.x,
+                det.bbox.center.orientation.y,
+                det.bbox.center.orientation.z,
+                det.bbox.center.orientation.w,
+            ]).as_matrix()
+
+            center = tf_rot @ det_pos + tf_pos
+            rot = tf_rot @ det_rot
+            half_extents = np.array([
+                det.bbox.size.x / 2.0,
+                det.bbox.size.y / 2.0,
+                det.bbox.size.z / 2.0,
+            ])
+
+            obstacles.append({
+                'center': center,
+                'rot': rot,
+                'half_extents': half_extents,
+            })
+        self._obstacles = obstacles
+
+    def _build_obstacle_constraints(self, constraints, closest_points):
+        if not self._obstacles or self.geom_type != 'boxes':
+            return
+        from g1_cbf.cbf import _box_b_from_half_extents
+
+        beta = self.get_parameter('beta').value
+        for obs in self._obstacles:
+            obs_b = _box_b_from_half_extents(obs['half_extents'])
+            for body_name in self.kin.collision_bodies:
+                bodyA = self.kin.collision_bodies[body_name]
+                centerA, rotA = self.kin.get_collision_pose(body_name)
+                J6_A = self.kin.get_collision_jacobian(body_name)
+
+                alpha, A_row, b_val, p1, p2 = self.cbf.build_constraint(
+                    bodyA, centerA, rotA, J6_A,
+                    None, obs['center'], obs['rot'], self._zero_J6,
+                    b_override_B=obs_b,
+                )
+                constraints.append((A_row, b_val))
+                closest_points.append((p1, p2))
+
+                if alpha < 1.5 * beta:
+                    self.get_logger().info(
+                        f'obstacle alpha={alpha:.4f} body={body_name}',
+                        throttle_duration_sec=0.2,
+                    )
 
     def _extract_controlled(self, msg: JointState):
         name_to_pos = dict(zip(msg.name, msg.position))

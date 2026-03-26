@@ -16,5 +16,5 @@ g1_cbf_node:
 
     #speed gain
     K: 3.0
-    max_velocity: 0.5
+    max_velocity: 5.0
     lpf_gain: 0.0

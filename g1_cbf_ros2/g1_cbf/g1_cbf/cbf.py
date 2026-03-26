@@ -33,6 +33,12 @@ def _box_b_from_body(body):
     return extents
 
 
+def _box_b_from_half_extents(half_extents):
+    """b vector for Ax<=b from (3,) half-extents [hx, hy, hz]."""
+    hx, hy, hz = half_extents[0], half_extents[1], half_extents[2]
+    return jnp.array([hx, hy, hz, hx, hy, hz])
+
+
 class DpaxCapsuleCBF:
     """CBF for capsule-capsule pairs using dpax."""
 
@@ -116,14 +122,18 @@ class DpaxBoxCBF:
         self,
         bodyA, centerA, rotA, J6_A,
         bodyB, centerB, rotB, J6_B,
-        **kwargs,
+        *, b_override_B=None,
     ):
         """Build box CBF constraint.
+
+        Args:
+            b_override_B: optional (6,) jnp array for body B halfspace b-vector.
+                          When provided, bodyB is ignored.
 
         Returns (alpha, A_row, b_val, p1, p2).
         """
         b1 = _box_b_from_body(bodyA)
-        b2 = _box_b_from_body(bodyB)
+        b2 = b_override_B if b_override_B is not None else _box_b_from_body(bodyB)
         r1 = jnp.array(centerA, dtype=jnp.float64)
         Q1 = jnp.array(rotA, dtype=jnp.float64)
         r2 = jnp.array(centerB, dtype=jnp.float64)
