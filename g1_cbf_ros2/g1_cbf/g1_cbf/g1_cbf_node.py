@@ -11,8 +11,8 @@ import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import JointState
 
-from g1_cbf.scaling import Ellipsoid3D, BoxBody3D
-from g1_cbf.cbf import EllipsoidCBF3D
+from g1_cbf.scaling import Capsule3D
+from g1_cbf.cbf import CapsuleCBF
 from g1_cbf.kinematics import G1Kinematics, CONTROLLED_JOINTS, COLLISION_PAIRS
 from g1_cbf.qp_solver import CBFQPSolver
 from g1_cbf.collider_viz import ColliderVisualizer
@@ -24,8 +24,11 @@ class G1CBFNode(Node):
 
         # Parameters
         self.declare_parameter('dt', 0.02)
-        self.declare_parameter('beta', 1.2)
+        self.declare_parameter('beta', 1.05)
         self.declare_parameter('gamma', 5.0)
+        self.declare_parameter('K', 5.0)
+        self.declare_parameter('max_velocity', 0.5)
+        self.declare_parameter('lpf_gain', 0.1)
         self.declare_parameter('urdf_path', '')
 
         dt = self.get_parameter('dt').value
@@ -42,27 +45,24 @@ class G1CBFNode(Node):
 
         # Subsystems
         self.kin = G1Kinematics(urdf_path)
-        self.cbf = EllipsoidCBF3D(beta=beta, gamma=gamma)
+        self.cbf = CapsuleCBF(beta=beta, gamma=gamma)
         self.qp = CBFQPSolver(n_joints=self.kin.n_q, n_cbf=len(COLLISION_PAIRS))
         self.viz = ColliderVisualizer(self, self.kin, beta)
 
         # Collision bodies (persistent, updated each tick)
         self.bodies = {}
         for name, body in self.kin.collision_bodies.items():
-            if body.get('type') == 'box':
-                self.bodies[name] = BoxBody3D(
-                    np.zeros(3), np.eye(3),
-                    body['semi_axes'],
-                )
-            else:
-                self.bodies[name] = Ellipsoid3D(
-                    np.zeros(3), np.eye(3),
-                    body['semi_axes'],
-                )
+            self.bodies[name] = Capsule3D(
+                np.zeros(3), np.eye(3),
+                body['half_length'],
+                body['radius'],
+            )
 
         # State
         self.q_full = None  # Latest full joint state
         self.q_des_latest = None  # No command until upstream sends
+        self.q_des_filtered = None
+        self.q_cbf_target = None  # Integrated CBF-safe position
         self.nu_warm = {
             pair: 0.5 for pair in COLLISION_PAIRS
         }
@@ -106,10 +106,26 @@ class G1CBFNode(Node):
             return
 
         dt = self.get_parameter('dt').value
+        K = self.get_parameter('K').value
+        max_vel = self.get_parameter('max_velocity').value
+        lpf = self.get_parameter('lpf_gain').value
         q_ctrl = self.kin.extract_controlled(self.q_full)
 
-        # Position -> velocity
-        dq_ref = (self.q_des_latest - q_ctrl) / dt
+        # Initialize targets on first tick
+        if self.q_des_filtered is None:
+            self.q_des_filtered = self.q_des_latest.copy()
+        if self.q_cbf_target is None:
+            self.q_cbf_target = q_ctrl.copy()
+        if 0 < lpf < 1:
+            self.q_des_filtered += lpf * (
+                self.q_des_latest - self.q_des_filtered
+            )
+        else:
+            self.q_des_filtered = self.q_des_latest.copy()
+
+        # Proportional gain + velocity clamp
+        dq_ref = K * (self.q_des_filtered - self.q_cbf_target)
+        dq_ref = np.clip(dq_ref, -max_vel, max_vel)
 
         # Update FK
         self.kin.update(self.q_full)
@@ -152,21 +168,34 @@ class G1CBFNode(Node):
             self.dq_min, self.dq_max,
         )
 
-        # Convert back to position
-        q_safe = q_ctrl + dq_safe * dt
+        # Integrate safe velocity into persistent target
+        self.q_cbf_target += dq_safe * dt
+
+        # Clamp to prevent divergence if blocked
+        max_lead = 0.5
+        self.q_cbf_target = np.clip(
+            self.q_cbf_target,
+            q_ctrl - max_lead,
+            q_ctrl + max_lead,
+        )
 
         safe_msg = JointState()
         stamp = self.get_clock().now().to_msg()
         safe_msg.header.stamp = stamp
         safe_msg.name = list(CONTROLLED_JOINTS)
-        safe_msg.position = q_safe.tolist()
+        safe_msg.position = self.q_cbf_target.tolist()
+        safe_msg.velocity = dq_safe.tolist()
         self.cmd_pub.publish(safe_msg)
 
-        self.get_logger().debug(
-            f'alpha_min={alpha_min:.3f} '
-            f'dq_ref={np.linalg.norm(dq_ref):.3f} '
-            f'dq_safe={np.linalg.norm(dq_safe):.3f}',
-        )
+        beta = self.get_parameter('beta').value
+        if alpha_min < 3.0 * beta:
+            self.get_logger().info(
+                f'alpha_min={alpha_min:.4f} '
+                f'beta={beta} '
+                f'dq_ref={np.linalg.norm(dq_ref):.3f} '
+                f'dq_safe={np.linalg.norm(dq_safe):.3f}',
+                throttle_duration_sec=0.2,
+            )
 
     def _extract_controlled(self, msg: JointState) -> np.ndarray:
         """Extract controlled joint positions from JointState message."""

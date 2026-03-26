@@ -1,7 +1,7 @@
-"""Scaling functions for CBF collision bodies.
+"""Capsule collision body for CBF.
 
-Ellipsoid3D: F(p) = (p-c)^T M (p-c), quadratic scaling
-BoxBody3D:   Halfspace representation, linear scaling (paper eq 41)
+Capsule = line segment + radius. The long axis is the Z column
+of the collision body rotation matrix.
 """
 
 import numpy as np
@@ -16,58 +16,31 @@ def _skew(v):
     ])
 
 
-class Ellipsoid3D:
-    """F(p) = (p-c)^T M (p-c), M = R diag(1/a^2) R^T."""
+class Capsule3D:
+    """Capsule: line segment [c - l*v, c + l*v] with radius r.
 
-    def __init__(self, center, R, semi_axes):
-        self.semi_axes = semi_axes
-        self.P = np.diag([1.0 / a**2 for a in semi_axes])
-        self.P_inv = np.diag([a**2 for a in semi_axes])
-        self.center = np.asarray(center, dtype=float)
-        self.R = np.asarray(R, dtype=float)
-        self._update_matrices()
-
-    def _update_matrices(self):
-        self.M = self.R @ self.P @ self.R.T
-        self.M_inv = self.R @ self.P_inv @ self.R.T
-
-    def update(self, center, R):
-        self.center = np.asarray(center, dtype=float)
-        self.R = np.asarray(R, dtype=float)
-        self._update_matrices()
-
-    def scaling(self, p):
-        d = p - self.center
-        return float(d @ self.M @ d)
-
-    def gradient(self, p):
-        return 2.0 * self.M @ (p - self.center)
-
-    def hessian(self, p):
-        return 2.0 * self.M
-
-    def dscaling_dqi(self, p, Jt_i, Jr_i):
-        """(dF/dqi, d∇F/dqi) through pose change."""
-        d = p - self.center
-        S = _skew(Jr_i)
-        dM = S @ self.M - self.M @ S
-        dF = float(d @ dM @ d - 2.0 * d @ self.M @ Jt_i)
-        dgrad = 2.0 * dM @ d - 2.0 * self.M @ Jt_i
-        return dF, dgrad
-
-
-class BoxBody3D:
-    """Box defined by center, rotation, half-dimensions.
-
-    Uses halfspace representation for the CBF (paper eq 41).
-    Linear scaling: face at distance α * h_i from center.
+    Parameters
+    ----------
+    center : (3,) capsule center
+    R : (3,3) rotation matrix (long axis = R[:,2])
+    half_length : total half-length (segment + cap)
+    radius : capsule radius
     """
 
-    def __init__(self, center, R, half_dims):
-        self.half_dims = np.asarray(half_dims, dtype=float)
+    def __init__(self, center, R, half_length, radius):
+        self.radius = float(radius)
+        self.seg_half_len = float(half_length - radius)
         self.center = np.asarray(center, dtype=float)
-        self.R = np.asarray(R, dtype=float)
+        self.direction = np.asarray(R, dtype=float)[:, 2]
 
     def update(self, center, R):
         self.center = np.asarray(center, dtype=float)
-        self.R = np.asarray(R, dtype=float)
+        self.direction = np.asarray(R, dtype=float)[:, 2]
+
+    @property
+    def endpoint_a(self):
+        return self.center + self.seg_half_len * self.direction
+
+    @property
+    def endpoint_b(self):
+        return self.center - self.seg_half_len * self.direction
