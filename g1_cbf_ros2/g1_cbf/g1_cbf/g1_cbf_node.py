@@ -2,8 +2,10 @@
 """CBF safety filter node for G1 humanoid self-collision avoidance.
 
 Subscribes to /joint_commands_unsafe, applies CBF-QP filtering to prevent
-self-collisions between torso and arms, publishes safe commands on /joint_commands
-at a fixed rate (1/dt Hz) regardless of upstream publish rate.
+self-collisions between torso and arms, publishes safe commands on
+/joint_commands at a fixed rate (1/dt Hz).
+
+Uses dpax (JAX-based) for differentiable capsule proximity computation.
 """
 
 import numpy as np
@@ -11,8 +13,7 @@ import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import JointState
 
-from g1_cbf.scaling import Capsule3D
-from g1_cbf.cbf import CapsuleCBF
+from g1_cbf.cbf import DpaxCBF
 from g1_cbf.kinematics import G1Kinematics, CONTROLLED_JOINTS, COLLISION_PAIRS
 from g1_cbf.qp_solver import CBFQPSolver
 from g1_cbf.collider_viz import ColliderVisualizer
@@ -24,7 +25,7 @@ class G1CBFNode(Node):
 
         # Parameters
         self.declare_parameter('dt', 0.02)
-        self.declare_parameter('beta', 1.05)
+        self.declare_parameter('margin_phi', 0.001)
         self.declare_parameter('gamma', 5.0)
         self.declare_parameter('K', 5.0)
         self.declare_parameter('max_velocity', 0.5)
@@ -32,7 +33,7 @@ class G1CBFNode(Node):
         self.declare_parameter('urdf_path', '')
 
         dt = self.get_parameter('dt').value
-        beta = self.get_parameter('beta').value
+        margin_phi = self.get_parameter('margin_phi').value
         gamma = self.get_parameter('gamma').value
         urdf_path = self.get_parameter('urdf_path').value
 
@@ -41,34 +42,27 @@ class G1CBFNode(Node):
             raise RuntimeError('urdf_path not set')
 
         self.get_logger().info(f'Loading URDF: {urdf_path}')
-        self.get_logger().info(f'CBF params: dt={dt}, beta={beta}, gamma={gamma}')
+        self.get_logger().info(
+            f'CBF params: dt={dt}, margin_phi={margin_phi}, '
+            f'gamma={gamma}'
+        )
 
         # Subsystems
         self.kin = G1Kinematics(urdf_path)
-        self.cbf = CapsuleCBF(beta=beta, gamma=gamma)
-        self.qp = CBFQPSolver(n_joints=self.kin.n_q, n_cbf=len(COLLISION_PAIRS))
-        self.viz = ColliderVisualizer(self, self.kin, beta)
-
-        # Collision bodies (persistent, updated each tick)
-        self.bodies = {}
-        for name, body in self.kin.collision_bodies.items():
-            self.bodies[name] = Capsule3D(
-                np.zeros(3), np.eye(3),
-                body['half_length'],
-                body['radius'],
-            )
+        self.get_logger().info('Initializing dpax CBF (JAX JIT warmup)...')
+        self.cbf = DpaxCBF(gamma=gamma, margin_phi=margin_phi)
+        self.get_logger().info('dpax CBF ready')
+        self.qp = CBFQPSolver(
+            n_joints=self.kin.n_q,
+            n_cbf=len(COLLISION_PAIRS),
+        )
+        self.viz = ColliderVisualizer(self, self.kin)
 
         # State
-        self.q_full = None  # Latest full joint state
-        self.q_des_latest = None  # No command until upstream sends
+        self.q_full = None
+        self.q_des_latest = None
         self.q_des_filtered = None
-        self.q_cbf_target = None  # Integrated CBF-safe position
-        self.nu_warm = {
-            pair: 0.5 for pair in COLLISION_PAIRS
-        }
-        self.p_warm = {
-            pair: None for pair in COLLISION_PAIRS
-        }
+        self.q_cbf_target = None
 
         # Velocity limits (rad/s) from URDF
         self.dq_max = np.array([
@@ -79,29 +73,38 @@ class G1CBFNode(Node):
         self.dq_min = -self.dq_max
 
         # Subscribers
-        self.create_subscription(JointState, '/joint_states', self._joint_states_cb, 10)
-        self.create_subscription(JointState, '/joint_commands_unsafe', self._unsafe_cmd_cb, 10)
+        self.create_subscription(
+            JointState, '/joint_states',
+            self._joint_states_cb, 10,
+        )
+        self.create_subscription(
+            JointState, '/joint_commands_unsafe',
+            self._unsafe_cmd_cb, 10,
+        )
 
         # Publisher
-        self.cmd_pub = self.create_publisher(JointState, '/joint_commands', 10)
+        self.cmd_pub = self.create_publisher(
+            JointState, '/joint_commands', 10,
+        )
 
         # Timer: run CBF loop at 1/dt Hz
         self.create_timer(dt, self._tick)
 
-        self.get_logger().info(f'g1_cbf_node ready — publishing at {1.0/dt:.0f} Hz')
+        self.get_logger().info(
+            f'g1_cbf_node ready — publishing at {1.0/dt:.0f} Hz'
+        )
 
     def _joint_states_cb(self, msg: JointState):
-        """Store latest full joint state and publish collider visualization."""
-        self.q_full = self.kin.joint_names_to_q_full(list(msg.name), list(msg.position))
+        self.q_full = self.kin.joint_names_to_q_full(
+            list(msg.name), list(msg.position),
+        )
 
     def _unsafe_cmd_cb(self, msg: JointState):
-        """Store latest desired positions (do not process here — timer handles it)."""
         q_des = self._extract_controlled(msg)
         if q_des is not None:
             self.q_des_latest = q_des
 
     def _tick(self):
-        """Timer callback: run CBF-QP and publish."""
         if self.q_full is None or self.q_des_latest is None:
             return
 
@@ -130,37 +133,35 @@ class G1CBFNode(Node):
         # Update FK
         self.kin.update(self.q_full)
 
-        # Update body poses and get Jacobians
-        jacobians = {}
-        for name in self.bodies:
-            center, R = self.kin.get_collision_pose(name)
-            self.bodies[name].update(center, R)
-            jacobians[name] = (
-                self.kin.get_collision_jacobian(name)
-            )
+        # Get endpoints and Jacobians for each body
+        endpoints = {}
+        for name in self.kin.collision_bodies:
+            a, b, J_a, J_b = self.kin.get_endpoint_jacobians(name)
+            body = self.kin.collision_bodies[name]
+            endpoints[name] = {
+                'a': a, 'b': b,
+                'J_a': J_a, 'J_b': J_b,
+                'radius': body['radius'],
+            }
 
         # Publish collider visualization
         self.viz.publish(self.get_clock().now().to_msg())
 
         # Build CBF constraints
         constraints = []
-        alpha_min = float('inf')
+        phi_min = float('inf')
         for pair in COLLISION_PAIRS:
             nameA, nameB = pair
-            alpha, A_row, b_val, nu_new, p_new = (
-                self.cbf.build_constraint(
-                    self.bodies[nameA],
-                    self.bodies[nameB],
-                    jacobians[nameA],
-                    jacobians[nameB],
-                    self.nu_warm[pair],
-                    self.p_warm[pair],
-                )
+            eA, eB = endpoints[nameA], endpoints[nameB]
+
+            phi, A_row, b_val = self.cbf.build_constraint(
+                eA['radius'], eA['a'], eA['b'],
+                eA['J_a'], eA['J_b'],
+                eB['radius'], eB['a'], eB['b'],
+                eB['J_a'], eB['J_b'],
             )
-            self.nu_warm[pair] = nu_new
-            self.p_warm[pair] = p_new
             constraints.append((A_row, b_val))
-            alpha_min = min(alpha_min, alpha)
+            phi_min = min(phi_min, phi)
 
         # Solve QP
         dq_safe = self.qp.solve(
@@ -187,24 +188,24 @@ class G1CBFNode(Node):
         safe_msg.velocity = dq_safe.tolist()
         self.cmd_pub.publish(safe_msg)
 
-        beta = self.get_parameter('beta').value
-        if alpha_min < 3.0 * beta:
+        margin_phi = self.get_parameter('margin_phi').value
+        if phi_min < 3.0 * margin_phi:
             self.get_logger().info(
-                f'alpha_min={alpha_min:.4f} '
-                f'beta={beta} '
+                f'phi_min={phi_min:.6f} '
+                f'margin={margin_phi} '
                 f'dq_ref={np.linalg.norm(dq_ref):.3f} '
                 f'dq_safe={np.linalg.norm(dq_safe):.3f}',
                 throttle_duration_sec=0.2,
             )
 
-    def _extract_controlled(self, msg: JointState) -> np.ndarray:
-        """Extract controlled joint positions from JointState message."""
+    def _extract_controlled(self, msg: JointState):
         name_to_pos = dict(zip(msg.name, msg.position))
         q = np.zeros(self.kin.n_q)
         for i, jname in enumerate(CONTROLLED_JOINTS):
             if jname not in name_to_pos:
                 self.get_logger().warn(
-                    f'Joint {jname} not in /joint_commands_unsafe, dropping',
+                    f'Joint {jname} missing from '
+                    f'/joint_commands_unsafe, dropping',
                     throttle_duration_sec=2.0,
                 )
                 return None

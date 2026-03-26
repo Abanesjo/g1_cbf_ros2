@@ -136,6 +136,51 @@ class G1Kinematics:
         T_world = oMf * self.offset_se3[body_name]
         return T_world.translation.copy(), T_world.rotation.copy()
 
+    def get_endpoint_jacobians(self, body_name: str):
+        """Get capsule endpoints and their Jacobians (3 x n_controlled each).
+
+        Returns (a, b, J_a, J_b) where a/b are the capsule endpoints
+        in world frame and J_a/J_b map controlled joint velocities to
+        endpoint velocities.
+        """
+        fid = self.frame_ids[body_name]
+        body = _COLLISION_BODIES[body_name]
+        seg_half = body['half_length'] - body['radius']
+
+        J_frame = pin.getFrameJacobian(
+            self.model, self.data, fid, pin.LOCAL_WORLD_ALIGNED
+        )
+
+        oMf = self.data.oMf[fid]
+        offset_world = oMf.rotation @ body['offset_xyz']
+
+        # Offset-corrected translational Jacobian
+        J_trans = J_frame[:3, :] - _skew(offset_world) @ J_frame[3:, :]
+        J_rot = J_frame[3:, :]
+
+        # Capsule direction in world frame (Z column of collision body rotation)
+        T_world = oMf * self.offset_se3[body_name]
+        v = T_world.rotation[:, 2]
+
+        # Endpoint positions
+        center = T_world.translation
+        a = center + seg_half * v
+        b = center - seg_half * v
+
+        # Direction Jacobian: dv/dq = -skew(v) @ J_rot
+        J_v = -_skew(v) @ J_rot
+
+        # Endpoint Jacobians
+        J_a = J_trans + seg_half * J_v
+        J_b = J_trans - seg_half * J_v
+
+        # Extract controlled columns
+        return (
+            a.copy(), b.copy(),
+            J_a[:, self.controlled_v_indices],
+            J_b[:, self.controlled_v_indices],
+        )
+
     def get_collision_jacobian(self, body_name: str) -> np.ndarray:
         """Get 6 x 8 Jacobian at the collision body center.
 

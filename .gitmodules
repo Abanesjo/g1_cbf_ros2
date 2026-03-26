@@ -1,0 +1,3 @@
+[submodule "g1_cbf_ros2/dependencies/dpax"]
+	path = g1_cbf_ros2/dependencies/dpax
+	url = https://github.com/Abanesjo/dpax

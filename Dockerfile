@@ -15,7 +15,7 @@ RUN apt install -y \
     python3-pip \
     tmux
 
-RUN pip3 install osqp
+RUN pip3 install osqp "jax[cpu]" "numpy<2"
 
 # Workspace setup
 WORKDIR /workspace

@@ -1,130 +1,87 @@
-"""Capsule CBF: alpha from line-segment distance, analytical gradient.
+"""Capsule CBF using dpax for differentiable proximity computation.
 
-Alpha = d_segments / (r_A + r_B) where d_segments is the minimum
-distance between two line segments. Gradient uses Jacobians directly
-(dt terms cancel at closest points).
+Uses dpax.endpoints.proximity which returns
+phi = d_centerline^2 - (R1+R2)^2.
+Gradients via jax.grad with custom JVP.
 """
 
 import numpy as np
-from g1_cbf.scaling import _skew
+import jax
+import jax.numpy as jnp
+from jax import grad
+from dpax.endpoints import proximity
 
 
-def _segment_closest_points(capA, capB):
-    """Find closest points on two line segments.
+class DpaxCBF:
+    """CBF for capsule collision pairs using dpax."""
 
-    Returns (t_A, t_B, d, w_hat) where:
-      t_A, t_B: parameters along each segment
-      d: distance between closest points
-      w_hat: unit vector from q_B to q_A (or zeros if d≈0)
-    """
-    cA, vA, lA = capA.center, capA.direction, capA.seg_half_len
-    cB, vB, lB = capB.center, capB.direction, capB.seg_half_len
-
-    d_AB = cA - cB
-    cos_th = vA @ vB
-    sin2 = 1.0 - cos_th * cos_th
-
-    if sin2 < 1e-8:
-        # Near-parallel segments: project centers
-        tA = 0.0
-        tB = d_AB @ vB
-        tB = np.clip(tB, -lB, lB)
-    else:
-        # Standard closest point on two lines
-        a = d_AB @ vA
-        b = d_AB @ vB
-        tA = (a - cos_th * b) / sin2
-        tB = (cos_th * a - b) / sin2
-
-        # Clamp and re-project
-        if abs(tA) > lA:
-            tA = np.clip(tA, -lA, lA)
-            tB = (cA + tA * vA - cB) @ vB
-            tB = np.clip(tB, -lB, lB)
-        if abs(tB) > lB:
-            tB = np.clip(tB, -lB, lB)
-            tA = (cB + tB * vB - cA) @ vA
-            tA = np.clip(tA, -lA, lA)
-
-    qA = cA + tA * vA
-    qB = cB + tB * vB
-    w = qA - qB
-    d = np.linalg.norm(w)
-    w_hat = w / d if d > 1e-12 else np.zeros(3)
-
-    return float(tA), float(tB), float(d), w_hat
-
-
-class CapsuleCBF:
-    """CBF for capsule collision pairs."""
-
-    def __init__(self, beta: float = 1.05, gamma: float = 5.0):
-        self.beta = beta
+    def __init__(self, gamma: float = 5.0, margin_phi: float = 0.001):
         self.gamma = gamma
+        self.margin_phi = margin_phi
 
-    @staticmethod
-    def solve_alpha(capA, capB):
-        """Alpha = segment_distance / (r_A + r_B)."""
-        tA, tB, d, w_hat = _segment_closest_points(
-            capA, capB,
+        # JIT-compile the gradient function once
+        self._grad_fn = jax.jit(
+            grad(proximity, argnums=(1, 2, 4, 5))
         )
-        r_sum = capA.radius + capB.radius
-        alpha = d / r_sum if r_sum > 1e-12 else 1e6
-        return alpha, tA, tB, w_hat
 
-    @staticmethod
-    def compute_dalpha_dq(
-        tA, tB, w_hat, capA, capB, J_A, J_B,
-    ):
-        """Gradient dalpha/dq using Jacobians.
+        # Warm up JAX JIT with dummy call
+        _R = 0.1
+        _a = jnp.zeros(3)
+        _b = jnp.ones(3)
+        _ = proximity(_R, _a, _b, _R, _a + 5.0, _b + 5.0)
+        _ = self._grad_fn(_R, _a, _b, _R, _a + 5.0, _b + 5.0)
 
-        dα/dq_i = (1/(rA+rB)) * ŵ · (
-            dc_A + t_A·dv_A - dc_B - t_B·dv_B
-        )
-        where dv = skew(Jr) @ v.
-        dt terms cancel because w ⊥ v at closest points.
+    def compute_phi_and_grad(self, R1, a1, b1, R2, a2, b2):
+        """Compute proximity phi and endpoint gradients.
+
+        Returns (phi, dphi_da1, dphi_db1, dphi_da2, dphi_db2).
+        All returned as numpy arrays.
         """
-        r_sum = capA.radius + capB.radius
-        vA = capA.direction
-        vB = capB.direction
-        n_q = J_A.shape[1]
-        dalpha = np.zeros(n_q)
+        # Convert to JAX arrays (float64)
+        R1_j = jnp.float64(R1)
+        R2_j = jnp.float64(R2)
+        a1_j = jnp.array(a1, dtype=jnp.float64)
+        b1_j = jnp.array(b1, dtype=jnp.float64)
+        a2_j = jnp.array(a2, dtype=jnp.float64)
+        b2_j = jnp.array(b2, dtype=jnp.float64)
 
-        for i in range(n_q):
-            dc_A = J_A[:3, i]
-            dv_A = _skew(J_A[3:, i]) @ vA
-            dc_B = J_B[:3, i]
-            dv_B = _skew(J_B[3:, i]) @ vB
+        phi = float(proximity(R1_j, a1_j, b1_j, R2_j, a2_j, b2_j))
 
-            dd = w_hat @ (
-                dc_A + tA * dv_A - dc_B - tB * dv_B
-            )
-            dalpha[i] = dd / r_sum
-
-        return dalpha
-
-    def build_constraint(
-        self, capA, capB, J_A, J_B,
-        nu_warm=0.5, p_warm=None,
-    ):
-        """Build one CBF constraint.
-
-        Returns (alpha, A_row, b_val, nu_warm, p_star).
-        """
-        alpha, tA, tB, w_hat = self.solve_alpha(
-            capA, capB,
+        ga1, gb1, ga2, gb2 = self._grad_fn(
+            R1_j, a1_j, b1_j, R2_j, a2_j, b2_j,
         )
-        dalpha = self.compute_dalpha_dq(
-            tA, tB, w_hat, capA, capB, J_A, J_B,
-        )
-
-        h = alpha - self.beta
-        # Contact midpoint (for debug/warm-start compat)
-        qA = capA.center + tA * capA.direction
-        qB = capB.center + tB * capB.direction
-        p_star = 0.5 * (qA + qB)
 
         return (
-            alpha, dalpha, -self.gamma * h,
-            nu_warm, p_star,
+            phi,
+            np.asarray(ga1),
+            np.asarray(gb1),
+            np.asarray(ga2),
+            np.asarray(gb2),
         )
+
+    def build_constraint(
+        self,
+        R1, a1, b1, J_a1, J_b1,
+        R2, a2, b2, J_a2, J_b2,
+    ):
+        """Build one CBF constraint for a capsule pair.
+
+        Returns (phi, A_row, b_val) where the constraint is:
+            A_row @ dq >= b_val
+        i.e. dphi/dq @ dq >= -gamma * (phi - margin_phi)
+        """
+        phi, ga1, gb1, ga2, gb2 = self.compute_phi_and_grad(
+            R1, a1, b1, R2, a2, b2,
+        )
+
+        # Chain rule: dphi/dq = sum of dphi/d(endpoint) @ J_endpoint
+        dphi_dq = (
+            ga1 @ J_a1 + gb1 @ J_b1
+            + ga2 @ J_a2 + gb2 @ J_b2
+        )
+
+        h = phi - self.margin_phi
+        A_row = dphi_dq
+        b_val = -self.gamma * h
+
+        return phi, A_row, b_val
